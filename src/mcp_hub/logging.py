@@ -9,6 +9,7 @@ The logger is write-only in the hot path — no reads, no analytics.
 
 from __future__ import annotations
 
+import abc
 import logging
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -30,16 +31,18 @@ class CallMetadata:
     response_size_bytes: int
 
 
-class LogSink(Exception):
+class LogSink(abc.ABC):
     """Protocol for storing log entries.
 
     Implement this and inject into ZeroRetentionLogger to persist logs.
     """
 
+    @abc.abstractmethod
     async def write_metadata(self, metadata: CallMetadata, expires_at: Optional[str]) -> str:
         """Persist metadata row; return the generated log entry ID."""
         raise NotImplementedError
 
+    @abc.abstractmethod
     async def write_encrypted_payload(
         self, log_id: str, encrypted: dict[str, Any]
     ) -> None:
