@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- HubProxy engine: tool listing with Redis cache, prefixed routing, circuit breaker integration (#1)
+- UpstreamClient: JSON-RPC tool list and call with input schema validation (#1)
+- CircuitBreaker: Redis-backed open/closed/half-open state machine (#1)
+- LogSink ABC: metadata and encrypted_full logging modes (#1)
+- Comprehensive test suite (≥90% coverage) (#1)
 
 ## [0.1.0] - TBD
 

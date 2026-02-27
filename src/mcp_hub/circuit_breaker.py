@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -62,6 +61,15 @@ class CircuitBreaker:
         )
 
     async def record_failure(self) -> None:
+        current_state = await self.get_state()
+        if current_state == CircuitState.HALF_OPEN:
+            # If in HALF_OPEN and failure occurs, immediately trip back to OPEN
+            await self._trip()
+            # Set failure count to 1 for the current failure that caused re-tripping
+            await self._redis.set(f"{self._key}{_FAILURE_COUNT_SUFFIX}", 1)
+            await self._redis.expire(f"{self._key}{_FAILURE_COUNT_SUFFIX}", OPEN_TTL_SECONDS * 2)
+            return
+
         failures = await self._redis.incr(f"{self._key}{_FAILURE_COUNT_SUFFIX}")
         await self._redis.expire(
             f"{self._key}{_FAILURE_COUNT_SUFFIX}", OPEN_TTL_SECONDS * 2
@@ -74,6 +82,7 @@ class CircuitBreaker:
         pipe = self._redis.pipeline()
         pipe.set(f"{self._key}{_STATE_SUFFIX}", CircuitState.OPEN, ex=OPEN_TTL_SECONDS * 2)
         pipe.set(f"{self._key}{_OPEN_UNTIL_SUFFIX}", str(open_until), ex=OPEN_TTL_SECONDS * 2)
+        pipe.delete(f"{self._key}{_FAILURE_COUNT_SUFFIX}")  # Reset failure count when tripping
         await pipe.execute()
 
     async def _transition(self, state: CircuitState) -> None:
