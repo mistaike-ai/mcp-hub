@@ -18,8 +18,10 @@ from mcp_hub.interfaces import Registration
 
 logger = logging.getLogger(__name__)
 
+
 class UpstreamError(Exception):
     """Raised when an upstream call fails."""
+
 
 class UpstreamClient:
     """HTTP client for a single upstream MCP server.
@@ -37,7 +39,6 @@ class UpstreamClient:
         verify_tls: bool = True,
     ) -> None:
         self._reg = registration
-        # Since build_auth_headers signature is build_auth_headers(registration, raw_credential)
         self._headers = build_auth_headers(registration, raw_credential)
         self._verify_tls = verify_tls
         self._timeout = registration.timeout_seconds
@@ -53,18 +54,25 @@ class UpstreamClient:
             UpstreamError: On HTTP or protocol failure.
         """
         try:
-            # We also might want to pass timeout or verify_tls but mcp's streamablehttp_client might not support it directly without custom httpx client.
-            # But the task just says use streamablehttp_client.
-            async with streamablehttp_client(self._reg.url, headers=self._headers) as (read, write, _):
+            async with streamablehttp_client(
+                self._reg.url, headers=self._headers
+            ) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.list_tools()
-                    tools = [t.model_dump() for t in result.tools]
-                    
-            self._tool_schemas = {t["name"]: t.get("inputSchema", {}) for t in tools}
-            return tools
         except Exception as exc:
-            raise UpstreamError(f"list_tools HTTP error for {self._reg.name}: {exc}") from exc
+            raise UpstreamError(
+                f"list_tools error for {self._reg.name}: {exc}"
+            ) from exc
+
+        tools = []
+        if hasattr(result, "tools"):
+            for t in result.tools:
+                t_dict = t.model_dump()
+                tools.append(t_dict)
+                self._tool_schemas[t.name] = t.inputSchema
+
+        return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Forward a tool call to the upstream, validating arguments first.
@@ -83,22 +91,43 @@ class UpstreamClient:
         self._validate_arguments(name, arguments)
 
         try:
-            async with streamablehttp_client(self._reg.url, headers=self._headers) as (read, write, _):
+            async with streamablehttp_client(
+                self._reg.url, headers=self._headers
+            ) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.call_tool(name, arguments)
-                    return result.model_dump()
         except Exception as exc:
-            raise UpstreamError(f"call_tool HTTP error for {self._reg.name}: {exc}") from exc
+            raise UpstreamError(
+                f"call_tool error for {self._reg.name}: {exc}"
+            ) from exc
 
-    def _validate_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        if result.isError:
+            error_msg = "Unknown error"
+            if result.content:
+                # TextContent has text field, EmbeddedResource has resource
+                if hasattr(result.content[0], "text"):
+                    error_msg = result.content[0].text
+                else:
+                    error_msg = str(result.content)
+            raise UpstreamError(
+                f"Upstream error for {self._reg.name}/{name}: {error_msg}"
+            )
+
+        return result.model_dump()
+
+    def _validate_arguments(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> None:
         """Basic schema validation — checks required fields are present."""
         schema = self._tool_schemas.get(tool_name)
         if not schema:
+            # No cached schema; skip validation (upstream checks it)
             return
         required = schema.get("required", [])
         missing = [r for r in required if r not in arguments]
         if missing:
             raise ValueError(
-                f"Missing required arguments for {self._reg.name}/{tool_name}: {missing}"
+                f"Missing required arguments for "
+                f"{self._reg.name}/{tool_name}: {missing}"
             )
