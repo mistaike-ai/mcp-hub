@@ -10,16 +10,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+from mcp.client.streamable_http import streamablehttp_client
+from mcp import ClientSession
 
 from mcp_hub.auth import build_auth_headers
 from mcp_hub.interfaces import Registration
 
 logger = logging.getLogger(__name__)
-
-# MCP JSON-RPC method names
-_METHOD_LIST_TOOLS = "tools/list"
-_METHOD_CALL_TOOL = "tools/call"
 
 
 class UpstreamError(Exception):
@@ -56,22 +53,25 @@ class UpstreamClient:
         Raises:
             UpstreamError: On HTTP or protocol failure.
         """
-        payload = {"jsonrpc": "2.0", "id": 1, "method": _METHOD_LIST_TOOLS, "params": {}}
         try:
-            async with httpx.AsyncClient(
-                verify=self._verify_tls, timeout=self._timeout
-            ) as client:
-                resp = await client.post(
-                    self._reg.url, json=payload, headers=self._headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            raise UpstreamError(f"list_tools HTTP error for {self._reg.name}: {exc}") from exc
+            async with streamablehttp_client(
+                self._reg.url, headers=self._headers
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_tools()
+        except Exception as exc:
+            raise UpstreamError(
+                f"list_tools error for {self._reg.name}: {exc}"
+            ) from exc
 
-        tools: list[dict] = data.get("result", {}).get("tools", [])
-        # Cache schemas for argument validation
-        self._tool_schemas = {t["name"]: t.get("inputSchema", {}) for t in tools}
+        tools = []
+        if hasattr(result, "tools"):
+            for t in result.tools:
+                t_dict = t.model_dump()
+                tools.append(t_dict)
+                self._tool_schemas[t.name] = t.inputSchema
+
         return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -90,40 +90,44 @@ class UpstreamClient:
         """
         self._validate_arguments(name, arguments)
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": _METHOD_CALL_TOOL,
-            "params": {"name": name, "arguments": arguments},
-        }
         try:
-            async with httpx.AsyncClient(
-                verify=self._verify_tls, timeout=self._timeout
-            ) as client:
-                resp = await client.post(
-                    self._reg.url, json=payload, headers=self._headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
-            raise UpstreamError(f"call_tool HTTP error for {self._reg.name}: {exc}") from exc
-
-        if "error" in data:
+            async with streamablehttp_client(
+                self._reg.url, headers=self._headers
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(name, arguments)
+        except Exception as exc:
             raise UpstreamError(
-                f"Upstream error for {self._reg.name}/{name}: {data['error']}"
+                f"call_tool error for {self._reg.name}: {exc}"
+            ) from exc
+
+        if result.isError:
+            error_msg = "Unknown error"
+            if result.content:
+                # TextContent has text field, EmbeddedResource has resource
+                if hasattr(result.content[0], "text"):
+                    error_msg = result.content[0].text
+                else:
+                    error_msg = str(result.content)
+            raise UpstreamError(
+                f"Upstream error for {self._reg.name}/{name}: {error_msg}"
             )
 
-        return data.get("result")
+        return result.model_dump()
 
-    def _validate_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
+    def _validate_arguments(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> None:
         """Basic schema validation — checks required fields are present."""
         schema = self._tool_schemas.get(tool_name)
         if not schema:
-            # No cached schema; skip validation (upstream will reject invalid args)
+            # No cached schema; skip validation (upstream checks it)
             return
         required = schema.get("required", [])
         missing = [r for r in required if r not in arguments]
         if missing:
             raise ValueError(
-                f"Missing required arguments for {self._reg.name}/{tool_name}: {missing}"
+                f"Missing required arguments for "
+                f"{self._reg.name}/{tool_name}: {missing}"
             )

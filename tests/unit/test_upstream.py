@@ -1,6 +1,8 @@
 import pytest
-import respx
-from httpx import Response
+from unittest.mock import AsyncMock, patch
+
+from mcp.types import Tool, ListToolsResult, CallToolResult, TextContent
+
 from mcp_hub.upstream import UpstreamError, UpstreamClient
 from mcp_hub.interfaces import Registration
 
@@ -19,82 +21,111 @@ def registration():
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_list_tools_returns_tools(registration):
-    respx.post("https://api.test.com/mcp").mock(return_value=Response(200, json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {
-            "tools": [
-                {"name": "tool1", "description": "Desc 1", "inputSchema": {"type": "object", "properties": {}}}
-            ]
-        }
-    }))
+@patch("mcp_hub.upstream.ClientSession")
+@patch("mcp_hub.upstream.streamablehttp_client")
+async def test_list_tools_streamable_http(
+    mock_streamable_client, mock_session_class, registration
+):
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
+    mock_streamable_client.return_value = mock_ctx
+
+    mock_session = AsyncMock()
+    mock_session.initialize = AsyncMock()
+    tool = Tool(
+        name="tool1",
+        description="Desc 1",
+        inputSchema={"type": "object", "properties": {}}
+    )
+    mock_session.list_tools = AsyncMock(
+        return_value=ListToolsResult(tools=[tool])
+    )
+    mock_session_class.return_value.__aenter__.return_value = mock_session
 
     client = UpstreamClient(registration)
     tools = await client.list_tools()
 
     assert len(tools) == 1
     assert tools[0]["name"] == "tool1"
-    assert client._tool_schemas["tool1"] == {"type": "object", "properties": {}}
+    assert client._tool_schemas["tool1"] == {
+        "type": "object", "properties": {}
+    }
+
+    mock_streamable_client.assert_called_once_with(
+        "https://api.test.com/mcp", headers={}
+    )
+    mock_session.initialize.assert_called_once()
+    mock_session.list_tools.assert_called_once()
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_list_tools_http_error_raises_upstream_error(registration):
-    respx.post("https://api.test.com/mcp").mock(return_value=Response(500))
+@patch("mcp_hub.upstream.ClientSession")
+@patch("mcp_hub.upstream.streamablehttp_client")
+async def test_list_tools_upstream_error_on_failure(
+    mock_streamable_client, mock_session_class, registration
+):
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.side_effect = Exception("Connection failed")
+    mock_streamable_client.return_value = mock_ctx
 
     client = UpstreamClient(registration)
-    with pytest.raises(UpstreamError, match="list_tools HTTP error"):
+    with pytest.raises(UpstreamError, match="list_tools error"):
         await client.list_tools()
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_call_tool_success(registration):
-    respx.post("https://api.test.com/mcp").mock(return_value=Response(200, json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": {"output": "hello world"}
-    }))
+@patch("mcp_hub.upstream.ClientSession")
+@patch("mcp_hub.upstream.streamablehttp_client")
+async def test_call_tool_routes_correctly(
+    mock_streamable_client, mock_session_class, registration
+):
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
+    mock_streamable_client.return_value = mock_ctx
+
+    mock_session = AsyncMock()
+    mock_session.initialize = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=CallToolResult(
+        content=[TextContent(type="text", text="hello", audience=None)],
+        isError=False
+    ))
+    mock_session_class.return_value.__aenter__.return_value = mock_session
 
     client = UpstreamClient(registration)
-    # Mock schemas to skip validation or provide a simple one
     client._tool_schemas = {"tool1": {"required": []}}
 
     result = await client.call_tool("tool1", {"arg1": "val1"})
-    assert result == {"output": "hello world"}
+
+    assert result["isError"] is False
+    assert result["content"][0]["text"] == "hello"
+
+    mock_streamable_client.assert_called_once_with(
+        "https://api.test.com/mcp", headers={}
+    )
+    mock_session.initialize.assert_called_once()
+    mock_session.call_tool.assert_called_once_with("tool1", {"arg1": "val1"})
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_call_tool_missing_required_arg_raises(registration):
-    client = UpstreamClient(registration)
-    client._tool_schemas = {"tool1": {"required": ["important_arg"]}}
+@patch("mcp_hub.upstream.ClientSession")
+@patch("mcp_hub.upstream.streamablehttp_client")
+async def test_call_tool_upstream_error_on_failure(
+    mock_streamable_client, mock_session_class, registration
+):
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = (AsyncMock(), AsyncMock(), None)
+    mock_streamable_client.return_value = mock_ctx
 
-    with pytest.raises(ValueError, match="Missing required arguments"):
-        await client.call_tool("tool1", {"other_arg": "val"})
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_call_tool_upstream_http_error_raises(registration):
-    respx.post("https://api.test.com/mcp").mock(return_value=Response(404))
-
-    client = UpstreamClient(registration)
-    with pytest.raises(UpstreamError, match="call_tool HTTP error"):
-        await client.call_tool("tool1", {})
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_call_tool_rpc_error_raises(registration):
-    respx.post("https://api.test.com/mcp").mock(return_value=Response(200, json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "error": {"code": -32601, "message": "Method not found"}
-    }))
+    mock_session = AsyncMock()
+    mock_session.initialize = AsyncMock()
+    mock_session.call_tool = AsyncMock(return_value=CallToolResult(
+        content=[TextContent(type="text", text="Failed", audience=None)],
+        isError=True
+    ))
+    mock_session_class.return_value.__aenter__.return_value = mock_session
 
     client = UpstreamClient(registration)
-    with pytest.raises(UpstreamError, match="Upstream error for test_service/tool1"):
-        await client.call_tool("tool1", {})
+    client._tool_schemas = {"tool1": {"required": []}}
+
+    with pytest.raises(UpstreamError, match="Upstream error for.*Failed"):
+        await client.call_tool("tool1", {"arg1": "val1"})
