@@ -10,21 +10,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+from mcp.client.streamable_http import streamablehttp_client
+from mcp import ClientSession
 
 from mcp_hub.auth import build_auth_headers
 from mcp_hub.interfaces import Registration
 
 logger = logging.getLogger(__name__)
 
-# MCP JSON-RPC method names
-_METHOD_LIST_TOOLS = "tools/list"
-_METHOD_CALL_TOOL = "tools/call"
-
-
 class UpstreamError(Exception):
     """Raised when an upstream call fails."""
-
 
 class UpstreamClient:
     """HTTP client for a single upstream MCP server.
@@ -42,6 +37,7 @@ class UpstreamClient:
         verify_tls: bool = True,
     ) -> None:
         self._reg = registration
+        # Since build_auth_headers signature is build_auth_headers(registration, raw_credential)
         self._headers = build_auth_headers(registration, raw_credential)
         self._verify_tls = verify_tls
         self._timeout = registration.timeout_seconds
@@ -56,23 +52,19 @@ class UpstreamClient:
         Raises:
             UpstreamError: On HTTP or protocol failure.
         """
-        payload = {"jsonrpc": "2.0", "id": 1, "method": _METHOD_LIST_TOOLS, "params": {}}
         try:
-            async with httpx.AsyncClient(
-                verify=self._verify_tls, timeout=self._timeout
-            ) as client:
-                resp = await client.post(
-                    self._reg.url, json=payload, headers=self._headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
+            # We also might want to pass timeout or verify_tls but mcp's streamablehttp_client might not support it directly without custom httpx client.
+            # But the task just says use streamablehttp_client.
+            async with streamablehttp_client(self._reg.url, headers=self._headers) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.list_tools()
+                    tools = [t.model_dump() for t in result.tools]
+                    
+            self._tool_schemas = {t["name"]: t.get("inputSchema", {}) for t in tools}
+            return tools
+        except Exception as exc:
             raise UpstreamError(f"list_tools HTTP error for {self._reg.name}: {exc}") from exc
-
-        tools: list[dict] = data.get("result", {}).get("tools", [])
-        # Cache schemas for argument validation
-        self._tool_schemas = {t["name"]: t.get("inputSchema", {}) for t in tools}
-        return tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Forward a tool call to the upstream, validating arguments first.
@@ -90,36 +82,19 @@ class UpstreamClient:
         """
         self._validate_arguments(name, arguments)
 
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": _METHOD_CALL_TOOL,
-            "params": {"name": name, "arguments": arguments},
-        }
         try:
-            async with httpx.AsyncClient(
-                verify=self._verify_tls, timeout=self._timeout
-            ) as client:
-                resp = await client.post(
-                    self._reg.url, json=payload, headers=self._headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except httpx.HTTPError as exc:
+            async with streamablehttp_client(self._reg.url, headers=self._headers) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(name, arguments)
+                    return result.model_dump()
+        except Exception as exc:
             raise UpstreamError(f"call_tool HTTP error for {self._reg.name}: {exc}") from exc
-
-        if "error" in data:
-            raise UpstreamError(
-                f"Upstream error for {self._reg.name}/{name}: {data['error']}"
-            )
-
-        return data.get("result")
 
     def _validate_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
         """Basic schema validation — checks required fields are present."""
         schema = self._tool_schemas.get(tool_name)
         if not schema:
-            # No cached schema; skip validation (upstream will reject invalid args)
             return
         required = schema.get("required", [])
         missing = [r for r in required if r not in arguments]

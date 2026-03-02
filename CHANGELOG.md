@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Replace raw JSON-RPC POST with proper MCP Streamable HTTP client in UpstreamClient (#4)
+
 ### Added
 - HubProxy engine: tool listing with Redis cache, prefixed routing, circuit breaker integration (#1)
 - UpstreamClient: JSON-RPC tool list and call with input schema validation (#1)
