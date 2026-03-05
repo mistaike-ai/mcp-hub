@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- Reduce `_TOOL_CACHE_TTL` from 5 minutes to 30 seconds (#150)
 ### Fixed
 - Replace raw JSON-RPC POST with proper MCP Streamable HTTP client in UpstreamClient (#4)
 

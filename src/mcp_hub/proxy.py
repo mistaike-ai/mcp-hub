@@ -22,7 +22,7 @@ from mcp_hub.upstream import UpstreamClient, UpstreamError
 logger = logging.getLogger(__name__)
 
 _TOOL_CACHE_PREFIX = "mcp_hub:tools:"
-_TOOL_CACHE_TTL = 300  # 5 minutes
+_TOOL_CACHE_TTL = 30  # 30 seconds
 
 # Maximum concurrent upstream list_tools calls
 _MAX_CONCURRENT_LIST = 10
