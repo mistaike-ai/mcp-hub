@@ -109,7 +109,16 @@ jobs:
           exit 1
         fi
 
-        echo "PR structure OK: issue reference present, CHANGELOG.md updated."
+        # Detect duplicate issue references in lines ADDED by this PR (union merge can create these)
+        DUPES=$(git diff origin/$BASE...HEAD -- CHANGELOG.md \
+                | grep '^+' | grep -v '^+++' \
+                | grep -oE '\(#[0-9]+\)' | sort | uniq -d)
+        if [ -n "$DUPES" ]; then
+          echo "::error::Duplicate CHANGELOG entries introduced by this PR: $DUPES — remove duplicates before merging."
+          exit 1
+        fi
+
+        echo "PR structure OK: issue reference present, CHANGELOG.md updated, no duplicate entries."
       env:
         GH_TOKEN: ${{ github.token }}
 
