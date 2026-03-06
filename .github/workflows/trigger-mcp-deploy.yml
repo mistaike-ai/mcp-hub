@@ -1,0 +1,17 @@
+name: Trigger mistaike-mcp redeploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger:
+    runs-on: [self-hosted, linux, m700]
+    steps:
+      - name: Dispatch deploy to mistaike-mcp
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh workflow run deploy.yml \
+            --repo mistaike-ai/mistaike-mcp \
+            --ref main
