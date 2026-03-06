@@ -1,0 +1,117 @@
+# Auto-rebase all open PRs when main advances.
+# Eliminates the "DIRTY" PR backlog by keeping branches up to date automatically.
+# If a PR has a true merge conflict (not just CHANGELOG/tsconfig), posts a comment.
+name: Auto-rebase PRs on main advance
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  rebase:
+    name: Rebase open PRs
+    runs-on: [self-hosted, linux, m700]
+    timeout-minutes: 15
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Rebase all open PRs onto main
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PYEOF'
+          import subprocess, json, os, sys, tempfile, shutil
+
+          repo    = os.environ['REPO']
+          gh_pat  = os.environ['GH_TOKEN']
+
+          # List all open non-draft PRs
+          result = subprocess.run(
+              ['gh', 'pr', 'list', '--state', 'open', '--json',
+               'number,headRefName,isDraft,author', '--limit', '50'],
+              capture_output=True, text=True,
+              env={**os.environ, 'GH_TOKEN': gh_pat}
+          )
+          prs = json.loads(result.stdout)
+
+          failed = []
+          for pr in prs:
+              if pr['isDraft']:
+                  continue
+              branch = pr['headRefName']
+              num    = pr['number']
+              # Skip dependabot and bot PRs
+              if 'dependabot' in pr.get('author', {}).get('login', ''):
+                  continue
+
+              print(f"Rebasing PR #{num} ({branch})...")
+              work = tempfile.mkdtemp()
+              try:
+                  # Clone with PAT
+                  clone_url = f"https://x-access-token:{gh_pat}@github.com/{repo}.git"
+                  subprocess.run(['git', 'clone', '--depth=50', '--no-single-branch', clone_url, work],
+                                 check=True, capture_output=True)
+                  subprocess.run(['git', '-C', work, 'checkout', branch],
+                                 check=True, capture_output=True)
+                  subprocess.run(['git', '-C', work, 'fetch', 'origin', 'main'],
+                                 check=True, capture_output=True)
+                  subprocess.run(['git', '-C', work, 'config', 'user.name', 'github-actions[bot]'],
+                                 capture_output=True)
+                  subprocess.run(['git', '-C', work, 'config', 'user.email',
+                                  'github-actions[bot]@users.noreply.github.com'], capture_output=True)
+
+                  # Rebase with auto-skip of already-applied commits
+                  env = {**os.environ, 'GIT_SEQUENCE_EDITOR': 'true'}
+                  r = subprocess.run(['git', '-C', work, 'rebase', 'origin/main'],
+                                     capture_output=True, text=True, env=env)
+                  if r.returncode != 0:
+                      # Try skipping up to 5 already-applied commits
+                      ok = False
+                      for _ in range(5):
+                          r2 = subprocess.run(['git', '-C', work, 'rebase', '--skip'],
+                                              capture_output=True, text=True)
+                          if r2.returncode == 0:
+                              ok = True
+                              break
+                          if 'Successfully rebased' in r2.stdout:
+                              ok = True
+                              break
+                      if not ok:
+                          subprocess.run(['git', '-C', work, 'rebase', '--abort'], capture_output=True)
+                          failed.append((num, branch, r.stderr[:300]))
+                          continue
+
+                  # Push
+                  p = subprocess.run(['git', '-C', work, 'push', '--force-with-lease',
+                                      'origin', branch], capture_output=True, text=True)
+                  if p.returncode != 0:
+                      failed.append((num, branch, p.stderr[:300]))
+                  else:
+                      print(f"  ✓ PR #{num} rebased")
+              except Exception as e:
+                  failed.append((num, branch, str(e)))
+              finally:
+                  shutil.rmtree(work, ignore_errors=True)
+
+          # Comment on PRs with true conflicts
+          for num, branch, err in failed:
+              print(f"::warning::PR #{num} ({branch}) has a true merge conflict — manual rebase needed")
+              subprocess.run(
+                  ['gh', 'pr', 'comment', str(num), '--body',
+                   f'⚠️ **Auto-rebase failed** for `{branch}` — this PR has a true merge conflict that needs manual resolution.\n\n```\n{err[:500]}\n```'],
+                  env={**os.environ, 'GH_TOKEN': gh_pat}, capture_output=True
+              )
+
+          if failed:
+              print(f"\n{len(failed)} PR(s) need manual rebase")
+          else:
+              print("\nAll PRs rebased successfully")
+          PYEOF
