@@ -64,7 +64,7 @@ class ZeroRetentionLogger:
 
     async def log_call(
         self,
-        registration: Registration,
+        registration: Optional[Registration],
         tool_name: str,
         arguments: dict[str, Any],
         response: Any,
@@ -87,7 +87,7 @@ class ZeroRetentionLogger:
         resp_bytes = len(json.dumps(response).encode()) if response is not None else 0
 
         metadata = CallMetadata(
-            registration_id=registration.id,
+            registration_id=registration.id if registration is not None else "native",
             tool_name=tool_name,
             latency_ms=latency_ms,
             status=status,
@@ -97,7 +97,7 @@ class ZeroRetentionLogger:
 
         log_id = await self._sink.write_metadata(metadata, expires_at)
 
-        if registration.log_mode == "encrypted_full":
+        if registration is not None and registration.log_mode == "encrypted_full":
             payload = {"arguments": arguments, "response": response}
             # Encrypt BEFORE handing to sink — sink never sees plaintext
             encrypted = self._encryption.encrypt_payload(payload, user_key)

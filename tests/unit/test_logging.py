@@ -150,3 +150,30 @@ class TestZeroRetentionLogger:
         args, _ = mock_log_sink.write_metadata.call_args
         metadata = args[0]
         assert metadata.response_size_bytes == 0
+
+    @pytest.mark.asyncio
+    async def test_native_tool_call_registration_none(
+        self, zero_retention_logger, mock_log_sink, mock_encryption_provider
+    ):
+        """registration=None (native platform tools) must use 'native' as registration_id
+        and must NOT attempt encrypted_full path."""
+        mock_log_sink.write_metadata.return_value = "log_entry_id_native"
+
+        await zero_retention_logger.log_call(
+            registration=None,
+            tool_name=self.TOOL_NAME,
+            arguments=self.ARGUMENTS,
+            response=self.RESPONSE,
+            latency_ms=self.LATENCY_MS,
+            status=self.STATUS,
+            user_key=b"",
+            expires_at=self.EXPIRES_AT,
+        )
+
+        mock_log_sink.write_metadata.assert_called_once()
+        args, _ = mock_log_sink.write_metadata.call_args
+        metadata = args[0]
+        assert metadata.registration_id == "native"
+        assert metadata.tool_name == self.TOOL_NAME
+        mock_log_sink.write_encrypted_payload.assert_not_called()
+        mock_encryption_provider.encrypt_payload.assert_not_called()

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 - Reduce `_TOOL_CACHE_TTL` from 5 minutes to 30 seconds (#150)
+
+### Fixed
+- fix(logging): `ZeroRetentionLogger.log_call()` crashes with `AttributeError` when `registration=None` — native platform tool calls via `hub_mcp` were silently not logged; use `"native"` as `registration_id` when registration is absent (#174)
 ### Fixed
 - Replace raw JSON-RPC POST with proper MCP Streamable HTTP client in UpstreamClient (#4)
 
