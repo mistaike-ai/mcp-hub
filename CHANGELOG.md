@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 - CI: CHANGELOG.md now uses Git union merge driver — eliminates rebase conflicts on concurrent PRs; pr-structure checks for duplicate issue references in [Unreleased] (#ci-infra)
+- CI: add auto-rebase-on-main workflow — keeps all open PRs rebased automatically when main advances, posts comment on true conflicts (#ci-infra)
 - Reduce `_TOOL_CACHE_TTL` from 5 minutes to 30 seconds (#150)
 
 ### CI
